@@ -129,14 +129,15 @@ func NewAPIProvider(url, model string) *APIProvider {
 	// OpenAI-compatible gateways). Ollama on localhost is keyless, so the
 	// key stays optional and an unset value just omits the header. Prefer
 	// an explicit GORTEX_EMBEDDINGS_API_KEY; fall back to OPENAI_API_KEY
-	// only when the endpoint is api.openai.com (and to REQUESTY_API_KEY
-	// only for a router.requesty.ai host), so a stray vendor key can
-	// never leak to an arbitrary third-party URL.
+	// only when the endpoint is https://api.openai.com (and to
+	// REQUESTY_API_KEY only for an https Requesty router host), so a
+	// stray vendor key can never leak to an arbitrary third-party URL.
+	// The host is matched exactly after parsing, never by substring.
 	apiKey := os.Getenv("GORTEX_EMBEDDINGS_API_KEY")
-	if apiKey == "" && strings.Contains(url, "openai.com") {
+	if apiKey == "" && isHTTPSHost(url, openAIHosts) {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
-	if apiKey == "" && strings.Contains(url, "requesty.ai") {
+	if apiKey == "" && isHTTPSHost(url, requestyHosts) {
 		apiKey = os.Getenv("REQUESTY_API_KEY")
 	}
 
@@ -147,6 +148,36 @@ func NewAPIProvider(url, model string) *APIProvider {
 		client: &http.Client{Timeout: 30 * time.Second},
 		format: format,
 	}
+}
+
+// openAIHosts and requestyHosts are the exact hostnames allowed to
+// receive the OPENAI_API_KEY / REQUESTY_API_KEY fallback.
+var (
+	openAIHosts   = []string{"api.openai.com"}
+	requestyHosts = []string{
+		"router.requesty.ai",
+		"router.eu.requesty.ai",
+		"router.us.requesty.ai",
+		"router.ap.requesty.ai",
+	}
+)
+
+// isHTTPSHost reports whether rawURL parses as an https URL whose
+// hostname is exactly one of hosts (case-insensitive). Lookalikes such
+// as "api.openai.com.attacker.example" or "evilrequesty.ai" and plain
+// http URLs do not match.
+func isHTTPSHost(rawURL string, hosts []string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, h := range hosts {
+		if host == h {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *APIProvider) Embed(ctx context.Context, text string) ([]float32, error) {
